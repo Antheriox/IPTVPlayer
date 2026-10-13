@@ -127,13 +127,15 @@ object CastSupport {
             val info = queueItem.media
             if (!isLive || info == null) return queueItem
 
-            val liveInfo = MediaInfo.Builder(info.contentId)
-                .setContentUrl(info.contentUrl)
+            // Only copy over the fields that are set: several Builder setters
+            // take non-null arguments.
+            val builder = MediaInfo.Builder(info.contentId)
                 .setStreamType(MediaInfo.STREAM_TYPE_LIVE)
-                .setContentType(info.contentType)
-                .setMetadata(info.metadata)
-                .setCustomData(info.customData)
-                .build()
+            info.contentUrl?.let { builder.setContentUrl(it) }
+            info.contentType?.let { builder.setContentType(it) }
+            info.metadata?.let { builder.setMetadata(it) }
+            info.customData?.let { builder.setCustomData(it) }
+            val liveInfo = builder.build()
             return MediaQueueItem.Builder(liveInfo).build()
         }
 
