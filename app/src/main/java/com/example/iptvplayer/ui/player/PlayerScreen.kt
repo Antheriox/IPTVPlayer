@@ -69,7 +69,7 @@ fun PlayerScreen(
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    var controlsVisible by remember { mutableStateOf(true) }
+    var controlsVisible by remember { mutableStateOf(false) }
 
     // Movies/series episodes get resume + progress tracking; live streams don't
     // have a meaningful "resume point" so they're left alone.
