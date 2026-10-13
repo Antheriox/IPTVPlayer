@@ -3,11 +3,17 @@ package com.example.iptvplayer.ui.player
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.view.WindowManager
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -28,12 +34,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import androidx.media3.cast.SessionAvailabilityListener
 import com.example.iptvplayer.MainViewModel
+import com.example.iptvplayer.cast.CastButton
+import com.example.iptvplayer.cast.CastSupport
 import com.example.iptvplayer.data.WatchProgressStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -67,6 +77,13 @@ fun PlayerScreen(
         streamUrl.contains("/movie/") || streamUrl.contains("/series/")
     }
 
+    // Shared, app-wide CastPlayer (null when the device has no Cast support).
+    val castPlayer = remember { CastSupport.castPlayer(context) }
+    val castMediaItem = remember(streamUrl, title) {
+        CastSupport.buildCastMediaItem(streamUrl, title, isLive = !isVod)
+    }
+    var castDeviceName by remember { mutableStateOf<String?>(null) }
+
     val exoPlayer = remember {
         ExoPlayer.Builder(context).build().apply {
             setMediaItem(MediaItem.fromUri(streamUrl))
@@ -78,6 +95,49 @@ fun PlayerScreen(
                         "The server may not support this format, or the link may be invalid."
                 }
             })
+        }
+    }
+
+    // Whichever player is currently in charge: the local ExoPlayer, or the
+    // CastPlayer while a Chromecast session is active.
+    var currentPlayer by remember { mutableStateOf<Player>(exoPlayer) }
+
+    // Hand playback over to the Chromecast, continuing where the phone was.
+    fun playOnCast() {
+        val cast = castPlayer ?: return
+        if (currentPlayer === cast) return
+        val position = exoPlayer.currentPosition
+        exoPlayer.stop()
+        if (isVod) cast.setMediaItem(castMediaItem, position)
+        else cast.setMediaItem(castMediaItem)
+        cast.playWhenReady = true
+        cast.prepare()
+        currentPlayer = cast
+        errorMessage = null
+        castDeviceName = CastSupport.connectedDeviceName(context)
+        viewModel.setCasting(true)
+    }
+
+    // Cast session ended (user tapped "stop casting", or the TV went away):
+    // pick up again on the phone at the position the TV had reached.
+    fun playOnPhone() {
+        val cast = castPlayer
+        if (cast == null || currentPlayer !== cast) return
+        val position = if (isVod) cast.currentPosition else C.TIME_UNSET
+        currentPlayer = exoPlayer
+        castDeviceName = null
+        viewModel.setCasting(false)
+        if (position != C.TIME_UNSET && position > 0) exoPlayer.seekTo(position)
+        exoPlayer.playWhenReady = true
+        exoPlayer.prepare()
+    }
+
+    val castErrorListener = remember {
+        object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                errorMessage = "The Chromecast couldn't play this stream (${error.errorCodeName}). " +
+                    "Some IPTV servers or formats (e.g. MKV, raw .ts) aren't supported by Chromecast."
+            }
         }
     }
 
@@ -113,14 +173,40 @@ fun PlayerScreen(
                 exoPlayer.seekTo(saved.positionMs)
             }
         }
+        // Already connected to a Chromecast (e.g. via the Cast button on the
+        // home screen)? Then send this channel/movie straight to the TV. Done
+        // after the resume seek so the TV starts at the saved position too.
+        if (castPlayer?.isCastSessionAvailable == true) playOnCast()
+    }
+
+    DisposableEffect(castPlayer) {
+        val cast = castPlayer
+        cast?.addListener(castErrorListener)
+        cast?.setSessionAvailabilityListener(object : SessionAvailabilityListener {
+            override fun onCastSessionAvailable() = playOnCast()
+            override fun onCastSessionUnavailable() = playOnPhone()
+        })
+        onDispose {
+            if (cast != null) {
+                cast.setSessionAvailabilityListener(null)
+                cast.removeListener(castErrorListener)
+                // Leaving the player = stop watching, on the TV too. The Cast
+                // connection itself stays up, so the next channel casts directly.
+                if (currentPlayer === cast) {
+                    cast.stop()
+                    cast.clearMediaItems()
+                }
+            }
+            viewModel.setCasting(false)
+        }
     }
 
     LaunchedEffect(streamUrl) {
         if (isVod) {
             while (true) {
                 delay(5_000)
-                val duration = exoPlayer.duration
-                val position = exoPlayer.currentPosition
+                val duration = currentPlayer.duration
+                val position = currentPlayer.currentPosition
                 if (duration > 0) {
                     progressStore.saveProgress(
                         streamUrl = streamUrl,
@@ -139,8 +225,8 @@ fun PlayerScreen(
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             if (isVod) {
-                val duration = exoPlayer.duration
-                val position = exoPlayer.currentPosition
+                val duration = currentPlayer.duration
+                val position = currentPlayer.currentPosition
                 if (duration > 0) {
                     scope.launch {
                         progressStore.saveProgress(
@@ -172,11 +258,40 @@ fun PlayerScreen(
                 }
             },
             update = { playerView ->
+                val casting = currentPlayer !== exoPlayer
+                if (playerView.player !== currentPlayer) playerView.player = currentPlayer
                 // No room (or need) for scrubbing controls in the tiny PiP window.
                 playerView.useController = !isInPip
+                // While casting the phone is just a remote: keep the controls up.
+                playerView.controllerShowTimeoutMs = if (casting) 0 else 5_000
+                playerView.controllerHideOnTouch = !casting
+                if (casting) playerView.showController()
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        if (currentPlayer !== exoPlayer) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.6f), MaterialTheme.shapes.medium)
+                    .padding(20.dp)
+            ) {
+                Icon(
+                    Icons.Filled.Cast,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(48.dp)
+                )
+                Text(
+                    castDeviceName?.let { "Casting to $it" } ?: "Casting to Chromecast",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
 
         if (errorMessage != null && !isInPip && controlsVisible) {
             Surface(
@@ -207,13 +322,18 @@ fun PlayerScreen(
                 }
             }
 
-            Surface(
-                color = Color.Black.copy(alpha = 0.5f),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(12.dp)
             ) {
-                Text(title, color = Color.White, modifier = Modifier.padding(8.dp))
+                Surface(color = Color.Black.copy(alpha = 0.5f)) {
+                    Text(title, color = Color.White, modifier = Modifier.padding(8.dp))
+                }
+                // Hides itself when no Chromecast is on the network.
+                CastButton()
             }
         }
     }

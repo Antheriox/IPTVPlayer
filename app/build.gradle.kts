@@ -65,6 +65,12 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer-hls:1.4.0")
     implementation("androidx.media3:media3-ui:1.4.0")
 
+    // Chromecast: Media3 CastPlayer + Google Cast SDK + the Cast (MediaRoute) button
+    implementation("androidx.media3:media3-cast:1.4.0")
+    implementation("com.google.android.gms:play-services-cast-framework:21.5.0")
+    implementation("androidx.mediarouter:mediarouter:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+
     // Networking (Xtream Codes API + M3U fetch)
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.11.0")

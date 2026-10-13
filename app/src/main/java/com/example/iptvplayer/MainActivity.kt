@@ -5,19 +5,24 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
 import android.util.Rational
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
+import androidx.appcompat.app.AppCompatActivity
 import androidx.navigation.compose.rememberNavController
+import com.example.iptvplayer.cast.CastSupport
 import com.example.iptvplayer.navigation.AppNavGraph
 import com.example.iptvplayer.ui.theme.IPTVPlayerTheme
 
-class MainActivity : ComponentActivity() {
+// AppCompatActivity (rather than ComponentActivity) because the Cast button's
+// device picker is a dialog fragment and needs a FragmentActivity host.
+class MainActivity : AppCompatActivity() {
 
     private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Initialise Cast early so device discovery / session resume start right away.
+        CastSupport.castContext(this)
         setContent {
             IPTVPlayerTheme {
                 val navController = rememberNavController()
@@ -30,7 +35,9 @@ class MainActivity : ComponentActivity() {
     // i.e. actually leaving the app, as opposed to pressing Back inside it.
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && viewModel.isPlayerActive.value) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && viewModel.isPlayerActive.value &&
+            !viewModel.isCasting.value
+        ) {
             val params = PictureInPictureParams.Builder()
                 .setAspectRatio(Rational(16, 9))
                 .build()
@@ -45,7 +52,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         super.onStop()
-        if (viewModel.isPlayerActive.value) {
+        // While casting, the TV keeps playing when the phone is locked or the
+        // user switches apps, so leave the player screen alone.
+        if (viewModel.isPlayerActive.value && !viewModel.isCasting.value) {
             viewModel.releaseActivePlayer()
         }
     }

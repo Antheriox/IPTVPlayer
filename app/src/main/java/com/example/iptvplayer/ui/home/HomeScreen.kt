@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.example.iptvplayer.MainViewModel
+import com.example.iptvplayer.cast.CastButton
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,6 +33,7 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text("IPTV Player") },
                 actions = {
+                    CastButton()
                     IconButton(onClick = onOpenSettings) {
                         Icon(Icons.Filled.Settings, contentDescription = "Settings")
                     }
