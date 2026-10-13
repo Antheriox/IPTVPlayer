@@ -43,7 +43,10 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.cast.SessionAvailabilityListener
 import com.example.iptvplayer.MainViewModel
 import com.example.iptvplayer.cast.CastButton
+import com.example.iptvplayer.cast.CastStreamProxy
 import com.example.iptvplayer.cast.CastSupport
+import com.google.android.gms.cast.MediaStatus
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.example.iptvplayer.data.WatchProgressStore
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -79,9 +82,6 @@ fun PlayerScreen(
 
     // Shared, app-wide CastPlayer (null when the device has no Cast support).
     val castPlayer = remember { CastSupport.castPlayer(context) }
-    val castMediaItem = remember(streamUrl, title) {
-        CastSupport.buildCastMediaItem(streamUrl, title, isLive = !isVod)
-    }
     var castDeviceName by remember { mutableStateOf<String?>(null) }
 
     val exoPlayer = remember {
@@ -102,18 +102,50 @@ fun PlayerScreen(
     // CastPlayer while a Chromecast session is active.
     var currentPlayer by remember { mutableStateOf<Player>(exoPlayer) }
 
+    // CastPlayer doesn't report receiver-side load failures, so watch the
+    // receiver's status directly: otherwise a stream the TV can't play just
+    // leaves the phone saying "Casting" over a grey TV screen.
+    val receiverWatcher = remember {
+        object : RemoteMediaClient.Callback() {
+            var client: RemoteMediaClient? = null
+
+            override fun onStatusUpdated() {
+                val status = client?.mediaStatus ?: return
+                if (status.playerState == MediaStatus.PLAYER_STATE_IDLE &&
+                    status.idleReason == MediaStatus.IDLE_REASON_ERROR
+                ) {
+                    errorMessage = "The Chromecast couldn't play this stream. The IPTV server " +
+                        "may block casting, or the video/audio format isn't supported by Chromecast."
+                }
+            }
+
+            fun attach(newClient: RemoteMediaClient?) {
+                detach()
+                client = newClient
+                newClient?.registerCallback(this)
+            }
+
+            fun detach() {
+                client?.unregisterCallback(this)
+                client = null
+            }
+        }
+    }
+
     // Hand playback over to the Chromecast, continuing where the phone was.
     fun playOnCast() {
         val cast = castPlayer ?: return
         if (currentPlayer === cast) return
         val position = exoPlayer.currentPosition
         exoPlayer.stop()
+        val castMediaItem = CastSupport.buildCastMediaItem(context, streamUrl, title, isLive = !isVod)
         if (isVod) cast.setMediaItem(castMediaItem, position)
         else cast.setMediaItem(castMediaItem)
         cast.playWhenReady = true
         cast.prepare()
         currentPlayer = cast
         errorMessage = null
+        receiverWatcher.attach(CastSupport.remoteMediaClient(context))
         castDeviceName = CastSupport.connectedDeviceName(context)
         viewModel.setCasting(true)
     }
@@ -126,6 +158,9 @@ fun PlayerScreen(
         val position = if (isVod) cast.currentPosition else C.TIME_UNSET
         currentPlayer = exoPlayer
         castDeviceName = null
+        errorMessage = null
+        receiverWatcher.detach()
+        CastStreamProxy.stop()
         viewModel.setCasting(false)
         if (position != C.TIME_UNSET && position > 0) exoPlayer.seekTo(position)
         exoPlayer.playWhenReady = true
@@ -197,6 +232,8 @@ fun PlayerScreen(
                     cast.clearMediaItems()
                 }
             }
+            receiverWatcher.detach()
+            CastStreamProxy.stop()
             viewModel.setCasting(false)
         }
     }
@@ -270,7 +307,7 @@ fun PlayerScreen(
             modifier = Modifier.fillMaxSize()
         )
 
-        if (currentPlayer !== exoPlayer) {
+        if (currentPlayer !== exoPlayer && errorMessage == null) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -293,7 +330,7 @@ fun PlayerScreen(
             }
         }
 
-        if (errorMessage != null && !isInPip && controlsVisible) {
+        if (errorMessage != null && !isInPip && (controlsVisible || currentPlayer !== exoPlayer)) {
             Surface(
                 color = MaterialTheme.colorScheme.errorContainer,
                 shape = MaterialTheme.shapes.medium,

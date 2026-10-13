@@ -24,6 +24,7 @@ import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
+import com.google.android.gms.cast.framework.media.RemoteMediaClient
 
 /**
  * Small helper around the Google Cast SDK. Everything here must be called on
@@ -68,6 +69,10 @@ object CastSupport {
         return CastPlayer(ctx, IptvMediaItemConverter()).also { castPlayer = it }
     }
 
+    /** Remote control for whatever is playing on the connected Chromecast. */
+    fun remoteMediaClient(context: Context): RemoteMediaClient? =
+        castContext(context)?.sessionManager?.currentCastSession?.remoteMediaClient
+
     /** Friendly name of the Chromecast we're connected to, e.g. "Living Room TV". */
     fun connectedDeviceName(context: Context): String? =
         castContext(context)?.sessionManager?.currentCastSession?.castDevice?.friendlyName
@@ -76,13 +81,21 @@ object CastSupport {
      * Builds the MediaItem sent to the Chromecast. Unlike ExoPlayer, the Cast
      * receiver needs to be told the MIME type up front, and can't play raw
      * MPEG-TS live streams — so Xtream live URLs are switched to their HLS variant.
+     * HLS is routed through [CastStreamProxy], because IPTV servers rarely send
+     * the CORS headers the Chromecast needs for HLS.
      */
-    fun buildCastMediaItem(streamUrl: String, title: String, isLive: Boolean): MediaItem {
+    fun buildCastMediaItem(context: Context, streamUrl: String, title: String, isLive: Boolean): MediaItem {
         val url = castCompatibleUrl(streamUrl, isLive)
+        val mimeType = guessMimeType(url, isLive)
+        val castUrl = if (mimeType == MimeTypes.APPLICATION_M3U8) {
+            CastStreamProxy.proxiedPlaylistUrl(context, url) ?: url
+        } else {
+            url
+        }
         val extras = Bundle().apply { putBoolean(EXTRA_IS_LIVE, isLive) }
         return MediaItem.Builder()
-            .setUri(url)
-            .setMimeType(guessMimeType(url, isLive))
+            .setUri(castUrl)
+            .setMimeType(mimeType)
             .setMediaMetadata(
                 MediaMetadata.Builder()
                     .setTitle(title)

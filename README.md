@@ -24,9 +24,14 @@ Live TV / Movies / Series and play streams with ExoPlayer.
 - The Chromecast fetches the stream itself, straight from your IPTV server:
   - Xtream live channels are cast as HLS (`.m3u8`) instead of `.ts`, since Chromecast
     can't play raw MPEG-TS streams.
-  - HLS streams only work on the Chromecast if the IPTV server sends CORS headers;
-    some providers don't, and then casting live TV fails while phone playback works.
+  - HLS needs CORS headers, which most IPTV servers don't send. So HLS (live TV) is
+    relayed through a small HTTP server on the phone that adds them — the app must
+    keep running (screen off is fine) while you cast live TV.
   - MP4 movies work everywhere; MKV only on newer devices (Chromecast with Google TV).
+  - Chromecast can't decode AC3 / E-AC3 / DTS audio (common in `.mkv` episodes),
+    so those play without sound unless your TV/soundbar handles passthrough.
+  - When the Chromecast can't play something, the player shows an error instead
+    of "Casting to …".
 
 ## What's NOT included (possible next steps)
 
