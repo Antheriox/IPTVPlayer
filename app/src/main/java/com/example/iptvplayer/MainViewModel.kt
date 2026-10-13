@@ -61,6 +61,12 @@ class MainViewModel : ViewModel() {
     val isInPipMode: StateFlow<Boolean> = _isInPipMode
     fun setInPipMode(inPip: Boolean) { _isInPipMode.value = inPip }
 
+    // True while the player screen is sending its stream to a Chromecast. The
+    // phone then shows no video, so PiP / stop-on-background don't apply.
+    private val _isCasting = MutableStateFlow(false)
+    val isCasting: StateFlow<Boolean> = _isCasting
+    fun setCasting(casting: Boolean) { _isCasting.value = casting }
+
     fun supportsMoviesAndSeries(): Boolean = repository?.supportsMoviesAndSeries() ?: false
 
     fun currentProfile(): Profile? = repository?.currentProfile()
